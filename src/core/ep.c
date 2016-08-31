@@ -44,12 +44,12 @@ static void nn_ep_handler (struct nn_fsm *self, int src, int type,
     void *srcptr);
 static void nn_ep_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr);
-
+// 初始化对端节点
 int nn_ep_init (struct nn_ep *self, int src, struct nn_sock *sock, int eid,
     struct nn_transport *transport, int bind, const char *addr)
 {
     int rc;
-
+    // 创建状态机
     nn_fsm_init (&self->fsm, nn_ep_handler, nn_ep_shutdown,
         src, self, &sock->fsm);
     self->state = NN_EP_STATE_IDLE;
@@ -58,6 +58,7 @@ int nn_ep_init (struct nn_ep *self, int src, struct nn_sock *sock, int eid,
     self->sock = sock;
     self->eid = eid;
     self->last_errno = 0;
+    // 初始化item
     nn_list_item_init (&self->item);
     memcpy (&self->options, &sock->ep_template, sizeof(struct nn_ep_options));
 
@@ -66,6 +67,7 @@ int nn_ep_init (struct nn_ep *self, int src, struct nn_sock *sock, int eid,
     strcpy (self->addr, addr);
 
     /*  Create transport-specific part of the endpoint. */
+    // 根据情况进行bind还是connect
     if (bind)
         rc = transport->bind ((void*) self, &self->epbase);
     else
@@ -92,6 +94,7 @@ void nn_ep_term (struct nn_ep *self)
 
 void nn_ep_start (struct nn_ep *self)
 {
+    // 启动状态机
     nn_fsm_start (&self->fsm);
 }
 

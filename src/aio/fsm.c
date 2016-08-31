@@ -104,6 +104,7 @@ void nn_fsm_init (struct nn_fsm *self, nn_fsm_fn fn,
 {
     self->fn = fn;
     self->shutdown_fn = shutdown_fn;
+    // 初始态为 空闲
     self->state = NN_FSM_STATE_IDLE;
     self->src = src;
     self->srcptr = srcptr;
@@ -156,7 +157,7 @@ void nn_fsm_stopped_noevent (struct nn_fsm *self)
     nn_assert_state (self, NN_FSM_STATE_STOPPING);
     self->state = NN_FSM_STATE_IDLE;
 }
-
+// 更新层级关系
 void nn_fsm_swap_owner (struct nn_fsm *self, struct nn_fsm_owner *owner)
 {
     int oldsrc;

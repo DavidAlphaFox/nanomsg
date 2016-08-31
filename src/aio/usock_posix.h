@@ -32,7 +32,7 @@ struct nn_usock {
     /*  State machine base class. */
     struct nn_fsm fsm;
     int state;
-
+    // 工作线程
     /*  The worker thread the usock is associated with. */
     struct nn_worker *worker;
 

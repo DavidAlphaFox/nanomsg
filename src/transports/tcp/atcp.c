@@ -48,6 +48,7 @@ static void nn_atcp_shutdown (struct nn_fsm *self, int src, int type,
 void nn_atcp_init (struct nn_atcp *self, int src,
     struct nn_epbase *epbase, struct nn_fsm *owner)
 {
+    // 启动acceptor
     nn_fsm_init (&self->fsm, nn_atcp_handler, nn_atcp_shutdown,
         src, self, owner);
     self->state = NN_ATCP_STATE_IDLE;
@@ -86,7 +87,9 @@ void nn_atcp_start (struct nn_atcp *self, struct nn_usock *listener)
     /*  Take ownership of the listener socket. */
     self->listener = listener;
     self->listener_owner.src = NN_ATCP_SRC_LISTENER;
+    // 将btcp中的uscok的状态机设置为自己
     self->listener_owner.fsm = &self->fsm;
+    // 让actp的fsm的状态机owner设置为btcp
     nn_usock_swap_owner (listener, &self->listener_owner);
 
     /*  Start the state machine. */
@@ -158,6 +161,7 @@ static void nn_atcp_handler (struct nn_fsm *self, int src, int type,
         case NN_FSM_ACTION:
             switch (type) {
             case NN_FSM_START:
+                // 状态机从IDLE->START
                 nn_usock_accept (&atcp->usock, atcp->listener);
                 atcp->state = NN_ATCP_STATE_ACCEPTING;
                 return;

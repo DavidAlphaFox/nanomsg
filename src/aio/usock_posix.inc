@@ -85,6 +85,7 @@ void nn_usock_init (struct nn_usock *self, int src, struct nn_fsm *owner)
     self->state = NN_USOCK_STATE_IDLE;
 
     /*  Choose a worker thread to handle this socket. */
+    // 绑定一个线程
     self->worker = nn_fsm_choose_worker (&self->fsm);
 
     /*  Actual file descriptor will be generated during 'start' step. */
@@ -199,6 +200,8 @@ static void nn_usock_init_from_fd (struct nn_usock *self, int s)
         here (if process is forked between socket creation and setting
         the option) but the problem is pretty unlikely to happen. */
 #if defined FD_CLOEXEC
+    // 如果有Close on Exec的话，立刻设置
+    // Close on Exec 可以防止派生后，错误的操作句柄    
     rc = fcntl (self->s, F_SETFD, FD_CLOEXEC);
 #if defined NN_HAVE_OSX
     errno_assert (rc != -1 || errno == EINVAL);
@@ -211,6 +214,9 @@ static void nn_usock_init_from_fd (struct nn_usock *self, int s)
         already closed by the peer. */
 #ifdef SO_NOSIGPIPE
     opt = 1;
+    // 不要让Socket发送SIGPIPE信号
+    // 另一种方式是signal(SIGPIPE, SIG_IGN);
+    // 全局忽略SIGPIPE
     rc = setsockopt (self->s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof (opt));
 #if defined NN_HAVE_OSX
     errno_assert (rc == 0 || errno == EINVAL);
@@ -224,6 +230,8 @@ static void nn_usock_init_from_fd (struct nn_usock *self, int s)
     opt = fcntl (self->s, F_GETFL, 0);
     if (opt == -1)
         opt = 0;
+    // 如果没设置none-blocking
+    // 则设置none-blocking
     if (!(opt & O_NONBLOCK)) {
         rc = fcntl (self->s, F_SETFL, opt | O_NONBLOCK);
 #if defined NN_HAVE_OSX
@@ -283,13 +291,15 @@ int nn_usock_bind (struct nn_usock *self, const struct sockaddr *addr,
     int opt;
 
     /*  The socket can be bound only before it's connected. */
+    // 确认状态机处在正确的状态
     nn_assert_state (self, NN_USOCK_STATE_STARTING);
 
     /*  Allow re-using the address. */
+    // 准许地址重用
     opt = 1;
     rc = setsockopt (self->s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt));
     errno_assert (rc == 0);
-
+    // bsd的socket的绑定
     rc = bind (self->s, addr, (socklen_t) addrlen);
     if (nn_slow (rc != 0))
         return -errno;
@@ -308,7 +318,7 @@ int nn_usock_listen (struct nn_usock *self, int backlog)
     rc = listen (self->s, backlog);
     if (nn_slow (rc != 0))
         return -errno;
-
+    // 更新状态机
     /*  Notify the state machine. */
     nn_fsm_action (&self->fsm, NN_USOCK_ACTION_LISTEN);
 
@@ -320,6 +330,7 @@ void nn_usock_accept (struct nn_usock *self, struct nn_usock *listener)
     int s;
 
     /*  Start the actual accepting. */
+    // 处在空闲的状态的话，立刻开始
     if (nn_fsm_isidle(&self->fsm)) {
         nn_fsm_start (&self->fsm);
         nn_fsm_action (&self->fsm, NN_USOCK_ACTION_BEING_ACCEPTED);
@@ -589,7 +600,7 @@ finish3:
 
     nn_fsm_bad_state(usock->state, src, type);
 }
-
+// 处理状态机转换
 static void nn_usock_handler (struct nn_fsm *self, int src, int type,
     NN_UNUSED void *srcptr)
 {
@@ -600,7 +611,7 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
     int sockerr;
 
     usock = nn_cont (self, struct nn_usock, fsm);
-
+    // 如果是内部任务就不尽兴状态转换
     if(nn_internal_tasks(usock, src, type))
         return;
 
@@ -616,6 +627,7 @@ static void nn_usock_handler (struct nn_fsm *self, int src, int type,
         case NN_FSM_ACTION:
             switch (type) {
             case NN_FSM_START:
+                // 更新为staring
                 usock->state = NN_USOCK_STATE_STARTING;
                 return;
             default:
