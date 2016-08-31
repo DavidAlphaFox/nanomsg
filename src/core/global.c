@@ -908,6 +908,7 @@ int nn_recvmsg (int s, struct nn_msghdr *msghdr, int flags)
     }
 
     /*  Get a message. */
+    // 收消息
     rc = nn_sock_recv (sock, &msg, flags);
     if (nn_slow (rc < 0)) {
         goto fail;

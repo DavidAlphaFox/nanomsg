@@ -203,7 +203,8 @@ void nn_sock_stop (struct nn_sock *self)
     nn_fsm_stop (&self->fsm);
     nn_ctx_leave (&self->ctx);
 }
-
+// 释放端口
+// 等待事件的触发
 int nn_sock_term (struct nn_sock *self)
 {
     int rc;
@@ -493,7 +494,7 @@ int nn_sock_getopt_inner (struct nn_sock *self, int level,
 
     return 0;
 }
-
+// 创建对端节点
 int nn_sock_add_ep (struct nn_sock *self, struct nn_transport *transport,
     int bind, const char *addr)
 {
@@ -1125,7 +1126,7 @@ int nn_sock_hold (struct nn_sock *self)
         return -EBADF;
     }
 }
-
+// 减少引用计数
 void nn_sock_rele (struct nn_sock *self)
 {
     self->holds--;
