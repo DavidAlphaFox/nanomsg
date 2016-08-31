@@ -195,7 +195,9 @@ void nn_sock_stopped (struct nn_sock *self)
     hold on the socket, cause endpoints to shut down, and wake any
     threads waiting to recv or send data. */
 void nn_sock_stop (struct nn_sock *self)
-{
+{ 
+    // 锁定sock的上下文之后
+    // 停止sock的状态机
     nn_ctx_enter (&self->ctx);
     nn_fsm_stop (&self->fsm);
     nn_ctx_leave (&self->ctx);
@@ -1109,16 +1111,16 @@ void nn_sock_stat_increment (struct nn_sock *self, int name, int64_t increment)
 }
 
 int nn_sock_hold (struct nn_sock *self)
-{
+{ 
     switch (self->state) {
-    case NN_SOCK_STATE_ACTIVE:
-    case NN_SOCK_STATE_INIT:
+      case NN_SOCK_STATE_ACTIVE:
+      case NN_SOCK_STATE_INIT:
         self->holds++;
         return 0;
-    case NN_SOCK_STATE_STOPPING:
-    case NN_SOCK_STATE_STOPPING_EPS:
-    case NN_SOCK_STATE_FINI:
-    default:
+      case NN_SOCK_STATE_STOPPING:
+      case NN_SOCK_STATE_STOPPING_EPS:
+      case NN_SOCK_STATE_FINI:
+      default:
         return -EBADF;
     }
 }

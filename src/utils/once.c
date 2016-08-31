@@ -19,7 +19,7 @@
     FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
     IN THE SOFTWARE.
 */
-
+// 数据进行唯一一次的初始化
 #include "once.h"
 #if NN_HAVE_WINDOWS
 

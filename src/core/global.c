@@ -141,6 +141,7 @@ struct nn_global {
 };
 
 /*  Singleton object containing the global state of the library. */
+// 全局的数据结构
 static struct nn_global self;
 static nn_once_t once = NN_ONCE_INITIALIZER;
 
@@ -205,9 +206,11 @@ static void nn_global_init (void)
     nn_random_seed ();
 
     /*  Allocate the global table of SP sockets. */
+    // 分配 512个nn_sock的结构空间和512个16位整形的空间
     self.socks = nn_alloc ((sizeof (struct nn_sock*) * NN_MAX_SOCKETS) +
         (sizeof (uint16_t) * NN_MAX_SOCKETS), "socket table");
     alloc_assert (self.socks);
+    // 让所有socks的结构为NULL
     for (i = 0; i != NN_MAX_SOCKETS; ++i)
         self.socks [i] = NULL;
     self.nsocks = 0;
@@ -219,8 +222,11 @@ static void nn_global_init (void)
     self.print_errors = envvar && *envvar;
 
     /*  Allocate the stack of unused file descriptors. */
+    // 记录没使用的socks的空间
     self.unused = (uint16_t*) (self.socks + NN_MAX_SOCKETS);
     alloc_assert (self.unused);
+    // 设置unused的初始值
+    // 反向的数组，511，510 一直到 0
     for (i = 0; i != NN_MAX_SOCKETS; ++i)
         self.unused [i] = NN_MAX_SOCKETS - i - 1;
 
@@ -311,20 +317,27 @@ static void nn_global_term (void)
 void nn_term (void)
 {
     int i;
-
+    // 上锁
     nn_mutex_lock (&self.lock);
+    // 标记terming
     self.flags |= NN_CTX_FLAG_TERMING;
+    // 解锁
     nn_mutex_unlock (&self.lock);
 
     /* Make sure we really close resources, this will cause global
        resources to be freed too when the last socket is closed. */
+    // 关闭所有的资源
     for (i = 0; i < NN_MAX_SOCKETS; i++) {
         (void) nn_close (i);
     }
 
     nn_mutex_lock (&self.lock);
+    // 上锁
+    // 设置NN_CTX_FLAG_TERMED
+    // 取消NN_CTX_FLAG_TERMING
     self.flags |= NN_CTX_FLAG_TERMED;
     self.flags &= ~NN_CTX_FLAG_TERMING;
+    // 全局广播
     nn_condvar_broadcast(&self.cond);
     nn_mutex_unlock (&self.lock);
 }
@@ -413,7 +426,7 @@ struct nn_cmsghdr *nn_cmsg_nxthdr_ (const struct nn_msghdr *mhdr,
     /*  Success. */
     return next;
 }
-
+// 创建socket
 int nn_global_create_socket (int domain, int protocol)
 {
     int rc;
@@ -464,6 +477,7 @@ int nn_global_create_socket (int domain, int protocol)
 static void nn_lib_init(void)
 {
     /*  This function is executed once to initialize global locks. */
+    // 初始化锁和条件变量
     nn_mutex_init (&self.lock);
     nn_condvar_init (&self.cond);
 }
@@ -473,17 +487,21 @@ int nn_socket (int domain, int protocol)
     int rc;
 
     nn_do_once (&once, nn_lib_init);
-
+    // 锁定锁
     nn_mutex_lock (&self.lock);
 
     /*  If nn_term() was already called, return ETERM. */
+    // 处在terming或者termd的时候
     if (nn_slow (self.flags & NN_CTX_FLAG_TERM)) {
+        // 解锁
         nn_mutex_unlock (&self.lock);
         errno = ETERM;
+        // 返回
         return -1;
     }
 
     /*  Make sure that global state is initialised. */
+    // 初始化全局数据
     nn_global_init ();
 
     rc = nn_global_create_socket (domain, protocol);
@@ -1148,15 +1166,16 @@ int nn_global_print_errors ()
 int nn_global_hold_socket_locked(struct nn_sock **sockp, int s)
 {
     struct nn_sock *sock;
-
+    // 不符合条件
     if (nn_slow (s < 0 || s >= NN_MAX_SOCKETS || self.socks == NULL))
         return -EBADF;
-
+    // 得到对应的sock结构
     sock = self.socks[s];
     if (nn_slow (sock == NULL)) {
         return -EBADF;
     }
-
+    // 返回0说明没问题
+    // 增加了引用技术
     if (nn_slow (nn_sock_hold (sock) != 0)) {
         return -EBADF;
     }

@@ -62,7 +62,7 @@ struct nn_fsm_owner {
     int src;
     struct nn_fsm *fsm;
 };
-
+// nanomsg的状态机
 struct nn_fsm {
     nn_fsm_fn fn;
     nn_fsm_fn shutdown_fn;

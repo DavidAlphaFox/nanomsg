@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define NN_PROTO_REQREP 3
-
+// 定义Req Rep的ID
 #define NN_REQ (NN_PROTO_REQREP * 16 + 0)
 #define NN_REP (NN_PROTO_REQREP * 16 + 1)
 

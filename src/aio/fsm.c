@@ -98,7 +98,7 @@ void nn_fsm_init_root (struct nn_fsm *self, nn_fsm_fn fn,
     self->ctx = ctx;
     nn_fsm_event_init (&self->stopped);
 }
-
+// 初始化状态机
 void nn_fsm_init (struct nn_fsm *self, nn_fsm_fn fn,
     nn_fsm_fn shutdown_fn, int src, void *srcptr, struct nn_fsm *owner)
 {
@@ -134,6 +134,9 @@ int nn_fsm_isidle (struct nn_fsm *self)
 void nn_fsm_stop (struct nn_fsm *self)
 {
     /*  If stopping of the state machine was already requested, do nothing. */
+    // 如果是非激活的状态，直接返回就行了
+    // 处在激活状态的时候，更新状态
+    // 然后关闭，因为外部有锁保护
     if (self->state != NN_FSM_STATE_ACTIVE)
         return;
 
