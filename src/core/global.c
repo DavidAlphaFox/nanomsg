@@ -235,6 +235,7 @@ static void nn_global_init (void)
     nn_list_init (&self.socktypes);
 
     /*  Plug in individual transports. */
+    // 初始化transport和sock类型
     nn_global_add_transport (nn_inproc);
     nn_global_add_transport (nn_ipc);
     nn_global_add_transport (nn_tcp);
@@ -263,6 +264,7 @@ static void nn_global_init (void)
     nn_global_add_socktype (nn_xbus_socktype);
 
     /*  Start the worker threads. */
+    // 初始化线程池
     nn_pool_init (&self.pool);
 }
 
