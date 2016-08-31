@@ -82,6 +82,7 @@ int nn_sock_init (struct nn_sock *self, struct nn_socktype *socktype, int fd)
     nn_ctx_init (&self->ctx, nn_global_getpool (), nn_sock_onleave);
 
     /*  Initialise the state machine. */
+    // 初始化状态机
     nn_fsm_init_root (&self->fsm, nn_sock_handler,
         nn_sock_shutdown, &self->ctx);
     self->state = NN_SOCK_STATE_INIT;

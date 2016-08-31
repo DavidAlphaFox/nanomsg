@@ -450,6 +450,8 @@ int nn_global_create_socket (int domain, int protocol)
     }
 
     /*  Find an empty socket slot. */
+    // 得到unused的id
+    // s会越来越大
     s = self.unused [NN_MAX_SOCKETS - self.nsocks - 1];
 
     /*  Find the appropriate socket type. */
@@ -457,11 +459,13 @@ int nn_global_create_socket (int domain, int protocol)
           it != nn_list_end (&self.socktypes);
           it = nn_list_next (&self.socktypes, it)) {
         socktype = nn_cont (it, struct nn_socktype, item);
+        // 工厂模式
         if (socktype->domain == domain && socktype->protocol == protocol) {
 
             /*  Instantiate the socket. */
             sock = nn_alloc (sizeof (struct nn_sock), "sock");
             alloc_assert (sock);
+            // 找到相同的协议和类型了
             rc = nn_sock_init (sock, socktype, s);
             if (rc < 0)
                 return rc;
@@ -1081,6 +1085,7 @@ static void nn_global_add_transport (struct nn_transport *transport)
 
 static void nn_global_add_socktype (struct nn_socktype *socktype)
 {
+    // 把socktype的item的地址作为值放入列表中
     nn_list_insert (&self.socktypes, &socktype->item,
         nn_list_end (&self.socktypes));
 }
