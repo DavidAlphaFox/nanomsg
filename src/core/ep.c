@@ -1,6 +1,7 @@
 /*
     Copyright (c) 2012 Martin Sustrik  All rights reserved.
     Copyright (c) 2013 GoPivotal, Inc.  All rights reserved.
+    Copyright 2016 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -46,7 +47,7 @@ static void nn_ep_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr);
 // 初始化对端节点
 int nn_ep_init (struct nn_ep *self, int src, struct nn_sock *sock, int eid,
-    struct nn_transport *transport, int bind, const char *addr)
+    const struct nn_transport *transport, int bind, const char *addr)
 {
     int rc;
     // 创建状态机
@@ -54,7 +55,6 @@ int nn_ep_init (struct nn_ep *self, int src, struct nn_sock *sock, int eid,
         src, self, &sock->fsm);
     self->state = NN_EP_STATE_IDLE;
 
-    self->epbase = NULL;
     self->sock = sock;
     self->eid = eid;
     self->last_errno = 0;
@@ -69,9 +69,9 @@ int nn_ep_init (struct nn_ep *self, int src, struct nn_sock *sock, int eid,
     /*  Create transport-specific part of the endpoint. */
     // 根据情况进行bind还是connect
     if (bind)
-        rc = transport->bind ((void*) self, &self->epbase);
+        rc = transport->bind (self);
     else
-        rc = transport->connect ((void*) self, &self->epbase);
+        rc = transport->connect (self);
 
     /*  Endpoint creation failed. */
     if (rc < 0) {
@@ -87,7 +87,7 @@ void nn_ep_term (struct nn_ep *self)
 {
     nn_assert_state (self, NN_EP_STATE_IDLE);
 
-    self->epbase->vfptr->destroy (self->epbase);
+    self->ops.destroy (self->tran);
     nn_list_item_term (&self->item);
     nn_fsm_term (&self->fsm);
 }
@@ -146,7 +146,7 @@ static void nn_ep_shutdown (struct nn_fsm *self, int src, int type,
     ep = nn_cont (self, struct nn_ep, fsm);
 
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
-        ep->epbase->vfptr->stop (ep->epbase);
+        ep->ops.stop (ep->tran);
         ep->state = NN_EP_STATE_STOPPING;
         return;
     }
@@ -230,4 +230,19 @@ void nn_ep_clear_error (struct nn_ep *self)
 void nn_ep_stat_increment (struct nn_ep *self, int name, int increment)
 {
     nn_sock_stat_increment (self->sock, name, increment);
+}
+
+int nn_ep_ispeer_ep (struct nn_ep *self, struct nn_ep *other)
+{
+    return nn_ep_ispeer (self, other->sock->socktype->protocol);
+}
+
+/*  Set up an ep for use by a transport.  Note that the core will already have
+    done most of the initialization steps.  The tran is passed as the argument
+    to the ops. */
+void nn_ep_tran_setup (struct nn_ep *ep, const struct nn_ep_ops *ops,
+    void *tran)
+{
+    ep->ops = *ops;
+    ep->tran = tran;
 }

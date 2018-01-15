@@ -1,7 +1,7 @@
 /*
     Copyright (c) 2013 Martin Sustrik  All rights reserved.
     Copyright (c) 2013 GoPivotal, Inc.  All rights reserved.
-    Copyright 2016 Garrett D'Amore <garrett@damore.org>
+    Copyright 2017 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -135,7 +135,12 @@ void nn_usock_term (struct nn_usock *self)
     nn_fsm_event_term (&self->event_sent);
     nn_fsm_event_term (&self->event_established);
 
+    nn_worker_cancel (self->worker, &self->task_stop);
     nn_worker_cancel (self->worker, &self->task_recv);
+    nn_worker_cancel (self->worker, &self->task_send);
+    nn_worker_cancel (self->worker, &self->task_accept);
+    nn_worker_cancel (self->worker, &self->task_connected);
+    nn_worker_cancel (self->worker, &self->task_connecting);
 
     nn_worker_task_term (&self->task_stop);
     nn_worker_task_term (&self->task_recv);
@@ -189,7 +194,7 @@ static void nn_usock_init_from_fd (struct nn_usock *self, int s)
     int opt;
 
     nn_assert (self->state == NN_USOCK_STATE_IDLE ||
-        NN_USOCK_STATE_BEING_ACCEPTED);
+        self->state == NN_USOCK_STATE_BEING_ACCEPTED);
 
     /*  Store the file descriptor. */
     nn_assert (self->s == -1);
@@ -294,12 +299,16 @@ int nn_usock_bind (struct nn_usock *self, const struct sockaddr *addr,
     // 确认状态机处在正确的状态
     nn_assert_state (self, NN_USOCK_STATE_STARTING);
 
+    /*  Windows Subsystem for Linux - SO_REUSEADDR is different,
+        and the Windows semantics are very wrong for us. */
+#ifndef NN_HAVE_WSL
     /*  Allow re-using the address. */
     // 准许地址重用
     opt = 1;
     rc = setsockopt (self->s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt));
     errno_assert (rc == 0);
-    // bsd的socket的绑定
+#endif
+
     rc = bind (self->s, addr, (socklen_t) addrlen);
     if (nn_slow (rc != 0))
         return -errno;
@@ -340,6 +349,11 @@ void nn_usock_accept (struct nn_usock *self, struct nn_usock *listener)
     /*  Try to accept new connection in synchronous manner. */
 #if NN_HAVE_ACCEPT4
     s = accept4 (listener->s, NULL, NULL, SOCK_CLOEXEC);
+    if ((s < 0) && (errno == ENOTSUP)) {
+        /*  Apparently some old versions of Linux have a stub for this in libc,
+            without any of the underlying kernel support. */
+        s = accept (listener->s, NULL, NULL);
+    }
 #else
     s = accept (listener->s, NULL, NULL);
 #endif

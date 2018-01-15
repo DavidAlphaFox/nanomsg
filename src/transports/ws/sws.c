@@ -1,7 +1,7 @@
 /*
     Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
     Copyright (c) 2014-2016 Jack R. Dunaway. All rights reserved.
-    Copyright 2015 Garrett D'Amore <garrett@damore.org>
+    Copyright 2016 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -132,18 +132,17 @@ static void nn_sws_validate_utf8_chunk (struct nn_sws *self);
 static void nn_sws_acknowledge_close_handshake (struct nn_sws *self);
 
 void nn_sws_init (struct nn_sws *self, int src,
-    struct nn_epbase *epbase, struct nn_fsm *owner)
+    struct nn_ep *ep, struct nn_fsm *owner)
 {
     nn_fsm_init (&self->fsm, nn_sws_handler, nn_sws_shutdown,
         src, self, owner);
     self->state = NN_SWS_STATE_IDLE;
-    self->epbase = epbase;
     nn_ws_handshake_init (&self->handshaker,
         NN_SWS_SRC_HANDSHAKE, &self->fsm);
     self->usock = NULL;
     self->usock_owner.src = -1;
     self->usock_owner.fsm = NULL;
-    nn_pipebase_init (&self->pipebase, &nn_sws_pipebase_vfptr, epbase);
+    nn_pipebase_init (&self->pipebase, &nn_sws_pipebase_vfptr, ep);
     self->instate = -1;
     nn_list_init (&self->inmsg_array);
     self->outstate = -1;
@@ -780,7 +779,7 @@ static void nn_sws_fail_conn (struct nn_sws *self, int code, char *reason)
     nn_assert (payload_len <= NN_SWS_PAYLOAD_MAX_LENGTH);
 
     /*  RFC 6455 section 5.5.1. */
-    self->fail_msg [0] = NN_SWS_FRAME_BITMASK_FIN | NN_WS_OPCODE_CLOSE;
+    self->fail_msg [0] = (char)(NN_SWS_FRAME_BITMASK_FIN | NN_WS_OPCODE_CLOSE);
 
     /*  Size of the payload, which is the status code plus the reason. */
     self->fail_msg [1] = (char)payload_len;
@@ -815,6 +814,7 @@ static void nn_sws_fail_conn (struct nn_sws *self, int code, char *reason)
 
     /*  Copy Close Reason immediately following the code. */
     memcpy (payload_pos + NN_SWS_CLOSE_CODE_LEN, reason, reason_len);
+    self->fail_msg_len += reason_len;
 
     /*  If this is a client, apply mask. */
     if (self->mode == NN_WS_CLIENT) {
@@ -822,7 +822,6 @@ static void nn_sws_fail_conn (struct nn_sws *self, int code, char *reason)
             rand_mask, NN_SWS_FRAME_SIZE_MASK, NULL);
     }
 
-    self->fail_msg_len += payload_len;
 
     if (self->outstate == NN_SWS_OUTSTATE_IDLE) {
         iov.iov_base = self->fail_msg;

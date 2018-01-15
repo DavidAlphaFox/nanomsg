@@ -1,6 +1,6 @@
 /*
     Copyright (c) 2013 Martin Sustrik  All rights reserved.
-    Copyright 2015 Garrett D'Amore <garrett@damore.org>
+    Copyright 2017 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -63,7 +63,7 @@ const struct nn_pipebase_vfptr nn_sinproc_pipebase_vfptr = {
 };
 
 void nn_sinproc_init (struct nn_sinproc *self, int src,
-    struct nn_epbase *epbase, struct nn_fsm *owner)
+    struct nn_ep *ep, struct nn_fsm *owner)
 {
     int rcvbuf;
     size_t sz;
@@ -73,9 +73,9 @@ void nn_sinproc_init (struct nn_sinproc *self, int src,
     self->state = NN_SINPROC_STATE_IDLE;
     self->flags = 0;
     self->peer = NULL;
-    nn_pipebase_init (&self->pipebase, &nn_sinproc_pipebase_vfptr, epbase);
+    nn_pipebase_init (&self->pipebase, &nn_sinproc_pipebase_vfptr, ep);
     sz = sizeof (rcvbuf);
-    nn_epbase_getopt (epbase, NN_SOL_SOCKET, NN_RCVBUF, &rcvbuf, &sz);
+    nn_ep_getopt (ep, NN_SOL_SOCKET, NN_RCVBUF, &rcvbuf, &sz);
     nn_assert (sz == sizeof (rcvbuf));
     nn_msgqueue_init (&self->msgqueue, rcvbuf);
     nn_msg_init (&self->msg, 0);
@@ -256,7 +256,10 @@ static void nn_sinproc_shutdown_events (struct nn_sinproc *self, int src,
                 self->state = NN_SINPROC_STATE_STOPPING;
                 return;
             default:
-                nn_fsm_bad_action (self->state, src, type);
+                /*  We could get a notification about state that
+                    was queued earlier, or about a sent message.  We
+                    do not care about those anymore, we're closing! */
+                return;
             }
         default:
             nn_fsm_bad_source (self->state, src, type);
@@ -389,6 +392,16 @@ static void nn_sinproc_handler (struct nn_fsm *self, int src, int type,
                 return;
             case NN_SINPROC_ACCEPTED:
                 rc = nn_pipebase_start (&sinproc->pipebase);
+		/*  We can fail this due to excl_add saying we are already
+                    connected. */
+                if (rc != 0) {
+                    nn_pipebase_stop (&sinproc->pipebase);
+                    sinproc->state = NN_SINPROC_STATE_DISCONNECTED;
+                    sinproc->peer = NULL;
+                    nn_fsm_raise (&sinproc->fsm, &sinproc->event_disconnect,
+                        NN_SINPROC_DISCONNECT);
+                    return;
+                }
                 errnum_assert (rc == 0, -rc);
                 sinproc->state = NN_SINPROC_STATE_ACTIVE;
                 return;

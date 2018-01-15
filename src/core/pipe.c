@@ -1,5 +1,6 @@
 /*
     Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
+    Copyright 2016 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -47,18 +48,17 @@
 #define NN_PIPEBASE_OUTSTATE_ASYNC 4
 
 void nn_pipebase_init (struct nn_pipebase *self,
-    const struct nn_pipebase_vfptr *vfptr, struct nn_epbase *epbase)
+    const struct nn_pipebase_vfptr *vfptr, struct nn_ep *ep)
 {
-    nn_assert (epbase->ep->sock);
+    nn_assert (ep->sock);
 
-    nn_fsm_init (&self->fsm, NULL, NULL, 0, self, &epbase->ep->sock->fsm);
+    nn_fsm_init (&self->fsm, NULL, NULL, 0, self, &ep->sock->fsm);
     self->vfptr = vfptr;
     self->state = NN_PIPEBASE_STATE_IDLE;
     self->instate = NN_PIPEBASE_INSTATE_DEACTIVATED;
     self->outstate = NN_PIPEBASE_OUTSTATE_DEACTIVATED;
-    self->sock = epbase->ep->sock;
-    memcpy (&self->options, &epbase->ep->options,
-        sizeof (struct nn_ep_options));
+    self->sock = ep->sock;
+    memcpy (&self->options, &ep->options, sizeof (struct nn_ep_options));
     nn_fsm_event_init (&self->in);
     nn_fsm_event_init (&self->out);
 }
@@ -86,8 +86,7 @@ int nn_pipebase_start (struct nn_pipebase *self)
         self->state = NN_PIPEBASE_STATE_FAILED;
         return rc;
     }
-    if (self->sock)
-        nn_fsm_raise (&self->fsm, &self->out, NN_PIPE_OUT);
+    nn_fsm_raise (&self->fsm, &self->out, NN_PIPE_OUT);
 
     return 0;
 }
@@ -107,8 +106,7 @@ void nn_pipebase_received (struct nn_pipebase *self)
     }
     nn_assert (self->instate == NN_PIPEBASE_INSTATE_ASYNC);
     self->instate = NN_PIPEBASE_INSTATE_IDLE;
-    if (self->sock)
-        nn_fsm_raise (&self->fsm, &self->in, NN_PIPE_IN);
+    nn_fsm_raise (&self->fsm, &self->in, NN_PIPE_IN);
 }
 
 void nn_pipebase_sent (struct nn_pipebase *self)
@@ -119,8 +117,7 @@ void nn_pipebase_sent (struct nn_pipebase *self)
     }
     nn_assert (self->outstate == NN_PIPEBASE_OUTSTATE_ASYNC);
     self->outstate = NN_PIPEBASE_OUTSTATE_IDLE;
-    if (self->sock)
-        nn_fsm_raise (&self->fsm, &self->out, NN_PIPE_OUT);
+    nn_fsm_raise (&self->fsm, &self->out, NN_PIPE_OUT);
 }
 
 void nn_pipebase_getopt (struct nn_pipebase *self, int level, int option,
@@ -225,4 +222,3 @@ void nn_pipe_getopt (struct nn_pipe *self, int level, int option,
     pipebase = (struct nn_pipebase*) self;
     nn_pipebase_getopt (pipebase, level, option, optval, optvallen);
 }
-

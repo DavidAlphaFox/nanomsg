@@ -1,7 +1,8 @@
 /*
     Copyright (c) 2012-2014 Martin Sustrik  All rights reserved.
     Copyright (c) 2013 GoPivotal, Inc.  All rights reserved.
-    Copyright 2016 Garrett D'Amore <garrett@damore.org>
+    Copyright 2017 Garrett D'Amore <garrett@damore.org>
+    Copyright 2017 Capitar IT Group BV <info@capitar.com>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -69,7 +70,8 @@ static void nn_sock_shutdown (struct nn_fsm *self, int src, int type,
 
 /*  Initialize a socket.  A hold is placed on the initialized socket for
     the caller as well. */
-int nn_sock_init (struct nn_sock *self, struct nn_socktype *socktype, int fd)
+int nn_sock_init (struct nn_sock *self, const struct nn_socktype *socktype,
+    int fd)
 {
     int rc;
     int i;
@@ -123,7 +125,6 @@ int nn_sock_init (struct nn_sock *self, struct nn_socktype *socktype, int fd)
     self->eid = 1;
 
     /*  Default values for NN_SOL_SOCKET options. */
-    self->linger = 1000;
     self->sndbuf = 128 * 1024;
     self->rcvbuf = 128 * 1024;
     self->rcvmaxsize = 1024 * 1024;
@@ -136,24 +137,8 @@ int nn_sock_init (struct nn_sock *self, struct nn_socktype *socktype, int fd)
     self->ep_template.rcvprio = 8;
     self->ep_template.ipv4only = 1;
 
-    /* Initialize statistic entries */
-    self->statistics.established_connections = 0;
-    self->statistics.accepted_connections = 0;
-    self->statistics.dropped_connections = 0;
-    self->statistics.broken_connections = 0;
-    self->statistics.connect_errors = 0;
-    self->statistics.bind_errors = 0;
-    self->statistics.accept_errors = 0;
-
-    self->statistics.messages_sent = 0;
-    self->statistics.messages_received = 0;
-    self->statistics.bytes_sent = 0;
-    self->statistics.bytes_received = 0;
-
-    self->statistics.current_connections = 0;
-    self->statistics.inprogress_connections = 0;
-    self->statistics.current_snd_priority = 0;
-    self->statistics.current_ep_errors = 0;
+    /* Clear statistic entries */
+    memset(&self->statistics, 0, sizeof (self->statistics));
 
     /*  Should be pretty much enough space for just the number  */
     sprintf(self->socket_name, "%d", fd);
@@ -243,6 +228,14 @@ int nn_sock_term (struct nn_sock *self)
     /*  At this point, we can be reasonably certain that no other thread
         has any references to the socket. */
 
+    /*  Close the event FDs entirely. */
+    if (!(self->socktype->flags & NN_SOCKTYPE_FLAG_NORECV)) {
+        nn_efd_term (&self->rcvfd);
+    }
+    if (!(self->socktype->flags & NN_SOCKTYPE_FLAG_NOSEND)) {
+        nn_efd_term (&self->sndfd);
+    }
+
     nn_fsm_stopped_noevent (&self->fsm);
     nn_fsm_term (&self->fsm);
     nn_sem_term (&self->termsem);
@@ -296,9 +289,13 @@ static int nn_sock_setopt_inner (struct nn_sock *self, int level,
     int val;
 
     /*  Protocol-specific socket options. */
-    if (level > NN_SOL_SOCKET)
+    if (level > NN_SOL_SOCKET) {
+        if (self->sockbase->vfptr->setopt == NULL) {
+            return -ENOPROTOOPT;
+        }
         return self->sockbase->vfptr->setopt (self->sockbase, level, option,
             optval, optvallen);
+    }
 
     /*  Transport-specific options. */
     if (level < NN_SOL_SOCKET) {
@@ -326,9 +323,6 @@ static int nn_sock_setopt_inner (struct nn_sock *self, int level,
 
     /*  Generic socket-level options. */
     switch (option) {
-    case NN_LINGER:
-        self->linger = val;
-        return 0;
     case NN_SNDBUF:
         if (val <= 0)
             return -EINVAL;
@@ -380,6 +374,9 @@ static int nn_sock_setopt_inner (struct nn_sock *self, int level,
             return -EINVAL;
         self->maxttl = val;
         return 0;
+    case NN_LINGER:
+	/*  Ignored, retained for compatibility. */
+        return 0;
     }
 
     return -ENOPROTOOPT;
@@ -400,15 +397,18 @@ int nn_sock_getopt (struct nn_sock *self, int level, int option,
 int nn_sock_getopt_inner (struct nn_sock *self, int level,
     int option, void *optval, size_t *optvallen)
 {
-    int rc;
     struct nn_optset *optset;
     int intval;
     nn_fd fd;
 
     /*  Protocol-specific socket options. */
-    if (level > NN_SOL_SOCKET)
-        return rc = self->sockbase->vfptr->getopt (self->sockbase,
+    if (level > NN_SOL_SOCKET) {
+        if (self->sockbase->vfptr->getopt == NULL) {
+            return -ENOPROTOOPT;
+        }
+        return self->sockbase->vfptr->getopt (self->sockbase,
             level, option, optval, optvallen);
+    }
 
     /*  Transport-specific options. */
     if (level < NN_SOL_SOCKET) {
@@ -429,7 +429,7 @@ int nn_sock_getopt_inner (struct nn_sock *self, int level,
         intval = self->socktype->protocol;
         break;
     case NN_LINGER:
-        intval = self->linger;
+        intval = 0;
         break;
     case NN_SNDBUF:
         intval = self->sndbuf;
@@ -495,7 +495,7 @@ int nn_sock_getopt_inner (struct nn_sock *self, int level,
     return 0;
 }
 // 创建对端节点
-int nn_sock_add_ep (struct nn_sock *self, struct nn_transport *transport,
+int nn_sock_add_ep (struct nn_sock *self, const struct nn_transport *transport,
     int bind, const char *addr)
 {
     int rc;
@@ -818,7 +818,7 @@ static void nn_sock_onleave (struct nn_ctx *self)
 static struct nn_optset *nn_sock_optset (struct nn_sock *self, int id)
 {
     int index;
-    struct nn_transport *tp;
+    const struct nn_transport *tp;
 
     /*  Transport IDs are negative and start from -1. */
     index = (-id) - 1;
@@ -916,14 +916,6 @@ finish1:
             We can safely deallocate it. */
         sock->sockbase->vfptr->destroy (sock->sockbase);
         sock->state = NN_SOCK_STATE_FINI;
-
-        /*  Close the event FDs entirely. */
-        if (!(sock->socktype->flags & NN_SOCKTYPE_FLAG_NORECV)) {
-            nn_efd_term (&sock->rcvfd);
-        }
-        if (!(sock->socktype->flags & NN_SOCKTYPE_FLAG_NOSEND)) {
-            nn_efd_term (&sock->sndfd);
-        }
 
         /*  Now we can unblock the application thread blocked in
             the nn_close() call. */
