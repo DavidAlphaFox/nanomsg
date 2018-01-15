@@ -1,5 +1,6 @@
 /*
     Copyright (c) 2012-2013 Martin Sustrik  All rights reserved.
+    Copyright 2016 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -22,9 +23,18 @@
 
 #include "atcp.h"
 
+#include "../../tcp.h"
+
 #include "../../utils/err.h"
 #include "../../utils/cont.h"
 #include "../../utils/attr.h"
+
+#if defined NN_HAVE_WINDOWS
+#include "../../utils/win.h"
+#else
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#endif
 
 #define NN_ATCP_STATE_IDLE 1
 #define NN_ATCP_STATE_ACCEPTING 2
@@ -46,18 +56,18 @@ static void nn_atcp_shutdown (struct nn_fsm *self, int src, int type,
     void *srcptr);
 
 void nn_atcp_init (struct nn_atcp *self, int src,
-    struct nn_epbase *epbase, struct nn_fsm *owner)
+    struct nn_ep *ep, struct nn_fsm *owner)
 {
     // 启动acceptor
     nn_fsm_init (&self->fsm, nn_atcp_handler, nn_atcp_shutdown,
         src, self, owner);
     self->state = NN_ATCP_STATE_IDLE;
-    self->epbase = epbase;
+    self->ep = ep;
     nn_usock_init (&self->usock, NN_ATCP_SRC_USOCK, &self->fsm);
     self->listener = NULL;
     self->listener_owner.src = -1;
     self->listener_owner.fsm = NULL;
-    nn_stcp_init (&self->stcp, NN_ATCP_SRC_STCP, epbase, &self->fsm);
+    nn_stcp_init (&self->stcp, NN_ATCP_SRC_STCP, ep, &self->fsm);
     nn_fsm_event_init (&self->accepted);
     nn_fsm_event_init (&self->done);
     nn_list_item_init (&self->item);
@@ -110,8 +120,7 @@ static void nn_atcp_shutdown (struct nn_fsm *self, int src, int type,
 
     if (nn_slow (src == NN_FSM_ACTION && type == NN_FSM_STOP)) {
         if (!nn_stcp_isidle (&atcp->stcp)) {
-            nn_epbase_stat_increment (atcp->epbase,
-                NN_STAT_DROPPED_CONNECTIONS, 1);
+            nn_ep_stat_increment (atcp->ep, NN_STAT_DROPPED_CONNECTIONS, 1);
             nn_stcp_stop (&atcp->stcp);
         }
         atcp->state = NN_ATCP_STATE_STOPPING_STCP_FINAL;
@@ -183,20 +192,23 @@ static void nn_atcp_handler (struct nn_fsm *self, int src, int type,
         case NN_ATCP_SRC_USOCK:
             switch (type) {
             case NN_USOCK_ACCEPTED:
-                nn_epbase_clear_error (atcp->epbase);
+                nn_ep_clear_error (atcp->ep);
 
                 /*  Set the relevant socket options. */
                 sz = sizeof (val);
-                nn_epbase_getopt (atcp->epbase, NN_SOL_SOCKET, NN_SNDBUF,
-                    &val, &sz);
+                nn_ep_getopt (atcp->ep, NN_SOL_SOCKET, NN_SNDBUF, &val, &sz);
                 nn_assert (sz == sizeof (val));
                 nn_usock_setsockopt (&atcp->usock, SOL_SOCKET, SO_SNDBUF,
                     &val, sizeof (val));
                 sz = sizeof (val);
-                nn_epbase_getopt (atcp->epbase, NN_SOL_SOCKET, NN_RCVBUF,
-                    &val, &sz);
+                nn_ep_getopt (atcp->ep, NN_SOL_SOCKET, NN_RCVBUF, &val, &sz);
                 nn_assert (sz == sizeof (val));
                 nn_usock_setsockopt (&atcp->usock, SOL_SOCKET, SO_RCVBUF,
+                    &val, sizeof (val));
+                sz = sizeof (val);
+                nn_ep_getopt (atcp->ep, NN_TCP, NN_TCP_NODELAY, &val, &sz);
+                nn_assert (sz == sizeof (val));
+                nn_usock_setsockopt (&atcp->usock, IPPROTO_TCP, TCP_NODELAY,
                     &val, sizeof (val));
 
                 /*  Return ownership of the listening socket to the parent. */
@@ -211,7 +223,7 @@ static void nn_atcp_handler (struct nn_fsm *self, int src, int type,
                 nn_stcp_start (&atcp->stcp, &atcp->usock);
                 atcp->state = NN_ATCP_STATE_ACTIVE;
 
-                nn_epbase_stat_increment (atcp->epbase,
+                nn_ep_stat_increment (atcp->ep,
                     NN_STAT_ACCEPTED_CONNECTIONS, 1);
 
                 return;
@@ -224,10 +236,8 @@ static void nn_atcp_handler (struct nn_fsm *self, int src, int type,
             switch (type) {
 
             case NN_USOCK_ACCEPT_ERROR:
-                nn_epbase_set_error (atcp->epbase,
-                    nn_usock_geterrno(atcp->listener));
-                nn_epbase_stat_increment (atcp->epbase,
-                    NN_STAT_ACCEPT_ERRORS, 1);
+                nn_ep_set_error (atcp->ep, nn_usock_geterrno(atcp->listener));
+                nn_ep_stat_increment (atcp->ep, NN_STAT_ACCEPT_ERRORS, 1);
                 nn_usock_accept (&atcp->usock, atcp->listener);
                 return;
 
@@ -250,8 +260,7 @@ static void nn_atcp_handler (struct nn_fsm *self, int src, int type,
             case NN_STCP_ERROR:
                 nn_stcp_stop (&atcp->stcp);
                 atcp->state = NN_ATCP_STATE_STOPPING_STCP;
-                nn_epbase_stat_increment (atcp->epbase,
-                    NN_STAT_BROKEN_CONNECTIONS, 1);
+                nn_ep_stat_increment (atcp->ep, NN_STAT_BROKEN_CONNECTIONS, 1);
                 return;
             default:
                 nn_fsm_bad_action (atcp->state, src, type);

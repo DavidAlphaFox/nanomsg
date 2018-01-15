@@ -1,7 +1,7 @@
 /*
     Copyright (c) 2013 250bpm s.r.o.  All rights reserved.
     Copyright (c) 2014-2016 Jack R. Dunaway.  All rights reserved.
-    Copyright 2015 Garrett D'Amore <garrett@damore.org>
+    Copyright 2017 Garrett D'Amore <garrett@damore.org>
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"),
@@ -38,10 +38,13 @@
 #include "../../utils/wire.h"
 #include "../../utils/attr.h"
 #include "../../utils/random.h"
+#include "../../utils/strcasestr.h"
 
 #include <stddef.h>
 #include <string.h>
 #include <ctype.h>
+
+#define	CRLF	"\r\n"
 
 /*****************************************************************************/
 /***  BEGIN undesirable dependency *******************************************/
@@ -886,6 +889,10 @@ static int nn_ws_handshake_parse_client_opening (struct nn_ws_handshake *self)
     self->protocol_len = 0;
     self->uri_len = 0;
 
+    /*  NB: If we got here, we already have a fully received set of
+        HTTP headers.  So there is no point in asking for more if the
+        headers lack what we need. */
+
     /*  This function, if generating a return value that triggers
         a response to the client, should replace this sentinel value
         with a proper response code. */
@@ -894,74 +901,88 @@ static int nn_ws_handshake_parse_client_opening (struct nn_ws_handshake *self)
     /*  RFC 7230 3.1.1 Request Line: HTTP Method
         Note requirement of one space and case sensitivity. */
     if (!nn_ws_match_token ("GET\x20", &pos, 0, 0))
-        return NN_WS_HANDSHAKE_RECV_MORE;
+        return NN_WS_HANDSHAKE_INVALID;
 
     /*  RFC 7230 3.1.1 Request Line: Requested Resource. */
     if (!nn_ws_match_value ("\x20", &pos, 0, 0, &self->uri, &self->uri_len))
-        return NN_WS_HANDSHAKE_RECV_MORE;
+        return NN_WS_HANDSHAKE_INVALID;
 
     /*  RFC 7230 3.1.1 Request Line: HTTP version. Note case sensitivity. */
     if (!nn_ws_match_token ("HTTP/1.1", &pos, 0, 0))
-        return NN_WS_HANDSHAKE_RECV_MORE;
-    if (!nn_ws_match_token (NN_WS_HANDSHAKE_CRLF, &pos, 0, 0))
-        return NN_WS_HANDSHAKE_RECV_MORE;
+        return NN_WS_HANDSHAKE_INVALID;
+
+    if (!nn_ws_match_token (CRLF, &pos, 0, 0))
+        return NN_WS_HANDSHAKE_INVALID;
 
     /*  It's expected the current position is now at the first
         header field. Match them one by one. */
     while (strlen (pos))
     {
+        const char *conn = NULL;
+        size_t conn_len = 0;
         if (nn_ws_match_token ("Host:", &pos, 1, 0)) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->host, &self->host_len);
         }
         else if (nn_ws_match_token ("Origin:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->origin, &self->origin_len);
         }
         else if (nn_ws_match_token ("Sec-WebSocket-Key:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->key, &self->key_len);
         }
         else if (nn_ws_match_token ("Upgrade:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->upgrade, &self->upgrade_len);
         }
         else if (nn_ws_match_token ("Connection:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
-                &self->conn, &self->conn_len);
+
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1, &conn, &conn_len);
+
+            /*  The values here can be comma delimited, or they can be
+                listed as separate Connection headers.  We only care about
+                the presence of the Upgrade header, and we're willing to
+                assume well-formedness.  This crummy parse may let clients
+                send us a malformed header that we ought to reject, but
+                we'll just cite Postel's law here if anyone asks. */
+            self->conn = nn_strcasestr (conn, "upgrade");
+            if (self->conn != NULL) {
+                self->conn_len = strlen ("upgrade");
+            }
         }
         else if (nn_ws_match_token ("Sec-WebSocket-Version:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->version, &self->version_len);
         }
         else if (nn_ws_match_token ("Sec-WebSocket-Protocol:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->protocol, &self->protocol_len);
         }
         else if (nn_ws_match_token ("Sec-WebSocket-Extensions:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->extensions, &self->extensions_len);
         }
-        else if (nn_ws_match_token (NN_WS_HANDSHAKE_CRLF,
+        else if (nn_ws_match_token (CRLF,
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
             /*  Exit loop since all headers are parsed. */
             break;
         }
         else {
             /*  Skip unknown headers. */
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 NULL, NULL);
         }
 
         if (rc != NN_WS_HANDSHAKE_MATCH)
-            return NN_WS_HANDSHAKE_RECV_MORE;
+            return NN_WS_HANDSHAKE_INVALID;
     }
 
     /*  Validate the opening handshake is now fully parsed. Additionally,
@@ -1099,7 +1120,7 @@ static int nn_ws_handshake_parse_server_response (struct nn_ws_handshake *self)
         return NN_WS_HANDSHAKE_RECV_MORE;
 
     /*  RFC 7230 3.1.2 Status Line: Reason Phrase. */
-    if (!nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 0, 0,
+    if (!nn_ws_match_value (CRLF, &pos, 0, 0,
         &self->reason_phrase, &self->reason_phrase_len))
         return NN_WS_HANDSHAKE_RECV_MORE;
 
@@ -1108,47 +1129,47 @@ static int nn_ws_handshake_parse_server_response (struct nn_ws_handshake *self)
     while (strlen (pos))
     {
         if (nn_ws_match_token ("Server:", &pos, 1, 0)) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->server, &self->server_len);
         }
         else if (nn_ws_match_token ("Sec-WebSocket-Accept:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->accept_key, &self->accept_key_len);
         }
         else if (nn_ws_match_token ("Upgrade:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->upgrade, &self->upgrade_len);
         }
         else if (nn_ws_match_token ("Connection:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->conn, &self->conn_len);
         }
         else if (nn_ws_match_token ("Sec-WebSocket-Version-Server:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->version, &self->version_len);
         }
         else if (nn_ws_match_token ("Sec-WebSocket-Protocol-Server:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->protocol, &self->protocol_len);
         }
         else if (nn_ws_match_token ("Sec-WebSocket-Extensions:",
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 &self->extensions, &self->extensions_len);
         }
-        else if (nn_ws_match_token (NN_WS_HANDSHAKE_CRLF,
+        else if (nn_ws_match_token (CRLF,
             &pos, 1, 0) == NN_WS_HANDSHAKE_MATCH) {
             /*  Exit loop since all headers are parsed. */
             break;
         }
         else {
             /*  Skip unknown headers. */
-            rc = nn_ws_match_value (NN_WS_HANDSHAKE_CRLF, &pos, 1, 1,
+            rc = nn_ws_match_value (CRLF, &pos, 1, 1,
                 NULL, NULL);
         }
 

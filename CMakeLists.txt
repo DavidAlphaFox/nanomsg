@@ -2,8 +2,8 @@
 #   Copyright (c) 2012 Martin Sustrik  All rights reserved.
 #   Copyright (c) 2013 GoPivotal, Inc.  All rights reserved.
 #   Copyright (c) 2015-2016 Jack R. Dunaway. All rights reserved.
-#   Copyright 2016 Garrett D'Amore <garrett@damore.org>
 #   Copyright 2016 Franklin "Snaipe" Mathieu <franklinmathieu@gmail.com>
+#   Copyright 2017 Garrett D'Amore <garrett@damore.org>
 #
 #   Permission is hereby granted, free of charge, to any person obtaining a copy
 #   of this software and associated documentation files (the "Software"),
@@ -39,6 +39,12 @@ if (POLICY CMP0042)
     cmake_policy (SET CMP0042 NEW)
 endif ()
 
+set (CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+list (FIND CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}" isSystemDir)
+if ("${isSystemDir}" STREQUAL "-1")
+    set (CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+endif ("${isSystemDir}" STREQUAL "-1")
+
 set (NN_DESCRIPTION "High-Performance Scalability Protocols")
 set (ISSUE_REPORT_MSG "Please consider opening an issue at https://github.com/nanomsg/nanomsg")
 
@@ -52,8 +58,9 @@ string (REGEX REPLACE ".*#define +NN_VERSION_AGE +([0-9]+).*" "\\1" NN_VERSION_A
 if ((NN_VERSION_CURRENT STREQUAL "") OR (NN_VERSION_REVISION STREQUAL "") OR (NN_VERSION_AGE STREQUAL ""))
     message (FATAL_ERROR "Could not read ABI version from nn.h")
 else ()
-    set (NN_ABI_VERSION "${NN_VERSION_CURRENT}.${NN_VERSION_REVISION}.${NN_VERSION_AGE}")
-    message (STATUS "Detected nanomsg ABI v${NN_ABI_VERSION}")
+    set (NN_ABI_VERSION "${NN_VERSION_CURRENT}")
+    set (NN_LIB_VERSION "${NN_VERSION_CURRENT}.${NN_VERSION_REVISION}.${NN_VERSION_AGE}")
+    message (STATUS "Detected nanomsg ABI v${NN_ABI_VERSION} (v${NN_LIB_VERSION})")
 endif ()
 
 # Determine package version.
@@ -95,13 +102,19 @@ option (NN_ENABLE_GETADDRINFO_A "Enable/disable use of getaddrinfo_a in place of
 option (NN_TESTS "Build and run nanomsg tests" ON)
 option (NN_TOOLS "Build nanomsg tools" ON)
 option (NN_ENABLE_NANOCAT "Enable building nanocat utility." ${NN_TOOLS})
+set (NN_MAX_SOCKETS 512 CACHE STRING "max number of nanomsg sockets that can be created")
 
 #  Platform checks.
 
 find_package (Threads REQUIRED)
 
+message(STATUS "OS System is ${CMAKE_SYSTEM_NAME}")
+message(STATUS "OS Version is ${CMAKE_SYSTEM_VERSION}")
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     add_definitions (-DNN_HAVE_LINUX)
+    if (CMAKE_SYSTEM_VERSION MATCHES "Microsoft")
+        add_definitions (-DNN_HAVE_WSL)
+    endif()
 elseif (CMAKE_SYSTEM_NAME MATCHES "Darwin")
     add_definitions (-DNN_HAVE_OSX)
 elseif (CMAKE_SYSTEM_NAME MATCHES "Windows")
@@ -231,6 +244,8 @@ if (NN_HAVE_GCC_ATOMIC_BUILTINS)
     add_definitions (-DNN_HAVE_GCC_ATOMIC_BUILTINS)
 endif ()
 
+add_definitions(-DNN_MAX_SOCKETS=${NN_MAX_SOCKETS})
+
 add_subdirectory (src)
 
 #  Build the tools
@@ -262,22 +277,22 @@ if (NN_ENABLE_DOC)
     macro (add_libnanomsg_man NAME SECT)
         add_custom_command (
             OUTPUT ${NAME}.${SECT}
-            COMMAND ${NN_A2M} -o ${NAME}.${SECT} ${NN_DOCDIR}/${NAME}.txt
-            MAIN_DEPENDENCY ${NN_DOCDIR}/${NAME}.txt
+            COMMAND ${NN_A2M} -o ${NAME}.${SECT} ${NN_DOCDIR}/${NAME}.adoc
+            MAIN_DEPENDENCY ${NN_DOCDIR}/${NAME}.adoc
         )
 
         add_custom_command (
-            OUTPUT ${NAME}.${SECT}.html
-            COMMAND ${NN_A2H} -o ${NAME}.${SECT}.html ${NN_DOCDIR}/${NAME}.txt
+            OUTPUT ${NAME}.html
+            COMMAND ${NN_A2H} -o ${NAME}.html ${NN_DOCDIR}/${NAME}.adoc
             DEPENDS ${NN_STYLESHEET}
-            MAIN_DEPENDENCY ${NN_DOCDIR}/${NAME}.txt
+            MAIN_DEPENDENCY ${NN_DOCDIR}/${NAME}.adoc
         )
 
         set(NN_MANS ${NN_MANS} ${NAME}.${SECT})
-        set(NN_HTMLS ${NN_HTMLS} ${NAME}.${SECT}.html)
+        set(NN_HTMLS ${NN_HTMLS} ${NAME}.html)
 
         install (
-            FILES ${CMAKE_CURRENT_BINARY_DIR}/${NAME}.${SECT}.html
+            FILES ${CMAKE_CURRENT_BINARY_DIR}/${NAME}.html
             DESTINATION ${CMAKE_INSTALL_DOCDIR}
         )
         install (
@@ -313,6 +328,7 @@ if (NN_ENABLE_DOC)
     add_libnanomsg_man (nn_device 3)
     add_libnanomsg_man (nn_cmsg 3)
     add_libnanomsg_man (nn_poll 3)
+    add_libnanomsg_man (nn_term 3)
 
     add_libnanomsg_man (nanomsg 7)
     add_libnanomsg_man (nn_pair 7)
@@ -355,9 +371,9 @@ if (NN_TESTS)
     add_libnanomsg_test (ipc 5)
     add_libnanomsg_test (ipc_shutdown 30)
     add_libnanomsg_test (ipc_stress 5)
-    add_libnanomsg_test (tcp 5)
+    add_libnanomsg_test (tcp 20)
     add_libnanomsg_test (tcp_shutdown 120)
-    add_libnanomsg_test (ws 5)
+    add_libnanomsg_test (ws 20)
 
     #  Protocol tests.
     add_libnanomsg_test (pair 5)
@@ -393,6 +409,7 @@ if (NN_TESTS)
     add_libnanomsg_test (shutdown 5)
     add_libnanomsg_test (cmsg 5)
     add_libnanomsg_test (bug328 5)
+    add_libnanomsg_test (bug777 5)
     add_libnanomsg_test (ws_async_shutdown 5)
     add_libnanomsg_test (reqttl 10)
     add_libnanomsg_test (surveyttl 10)

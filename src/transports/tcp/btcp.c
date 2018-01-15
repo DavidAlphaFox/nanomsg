@@ -59,16 +59,19 @@
 
 #define NN_BTCP_SRC_USOCK 1
 #define NN_BTCP_SRC_ATCP 2
+#define NN_BTCP_SRC_BTCP 3
+
+#define NN_BTCP_TYPE_LISTEN_ERR 1
+
 
 struct nn_btcp {
 
     /*  The state machine. */
     struct nn_fsm fsm;
+    struct nn_fsm_event listen_error;
     int state;
 
-    /*  This object is a specific type of endpoint.
-        Thus it is derived from epbase. */
-    struct nn_epbase epbase;
+    struct nn_ep *ep;
 
     /*  The underlying listening TCP socket. */
     struct nn_usock usock;
@@ -80,10 +83,10 @@ struct nn_btcp {
     struct nn_list atcps;
 };
 
-/*  nn_epbase virtual interface implementation. */
-static void nn_btcp_stop (struct nn_epbase *self);
-static void nn_btcp_destroy (struct nn_epbase *self);
-const struct nn_epbase_vfptr nn_btcp_epbase_vfptr = {
+/*  nn_ep virtual interface implementation. */
+static void nn_btcp_stop (void *);
+static void nn_btcp_destroy (void *);
+const struct nn_ep_ops nn_btcp_ep_ops = {
     nn_btcp_stop,
     nn_btcp_destroy
 };
@@ -96,7 +99,7 @@ static void nn_btcp_shutdown (struct nn_fsm *self, int src, int type,
 static int nn_btcp_listen (struct nn_btcp *self);
 static void nn_btcp_start_accepting (struct nn_btcp *self);
 
-int nn_btcp_create (void *hint, struct nn_epbase **epbase)
+int nn_btcp_create (struct nn_ep *ep)
 {
     int rc;
     struct nn_btcp *self;
@@ -110,42 +113,42 @@ int nn_btcp_create (void *hint, struct nn_epbase **epbase)
 
     /*  Allocate the new endpoint object. */
     self = nn_alloc (sizeof (struct nn_btcp), "btcp");
+    self->ep = ep;
     alloc_assert (self);
 
-    /*  Initalise the epbase. */
-    nn_epbase_init (&self->epbase, &nn_btcp_epbase_vfptr, hint);
-    addr = nn_epbase_getaddr (&self->epbase);
+    nn_ep_tran_setup (ep, &nn_btcp_ep_ops, self);
+    addr = nn_ep_getaddr (ep);
 
     /*  Parse the port. */
     end = addr + strlen (addr);
     pos = strrchr (addr, ':');
-    if (nn_slow (!pos)) {
-        nn_epbase_term (&self->epbase);
+    if (pos == NULL) {
+        nn_free (self);
         return -EINVAL;
     }
     ++pos;
     rc = nn_port_resolve (pos, end - pos);
-    if (nn_slow (rc < 0)) {
-        nn_epbase_term (&self->epbase);
+    if (rc < 0) {
+        nn_free (self);
         return -EINVAL;
     }
 
     /*  Check whether IPv6 is to be used. */
     ipv4onlylen = sizeof (ipv4only);
-    nn_epbase_getopt (&self->epbase, NN_SOL_SOCKET, NN_IPV4ONLY,
-        &ipv4only, &ipv4onlylen);
+    nn_ep_getopt (ep, NN_SOL_SOCKET, NN_IPV4ONLY, &ipv4only, &ipv4onlylen);
     nn_assert (ipv4onlylen == sizeof (ipv4only));
 
     /*  Parse the address. */
     rc = nn_iface_resolve (addr, pos - addr - 1, ipv4only, &ss, &sslen);
     if (nn_slow (rc < 0)) {
-        nn_epbase_term (&self->epbase);
+        nn_free (self);
         return -ENODEV;
     }
 
     /*  Initialise the structure. */
     nn_fsm_init_root (&self->fsm, nn_btcp_handler, nn_btcp_shutdown,
-        nn_epbase_getctx (&self->epbase));
+        nn_ep_getctx (ep));
+    nn_fsm_event_init (&self->listen_error);
     self->state = NN_BTCP_STATE_IDLE;
     self->atcp = NULL;
     nn_list_init (&self->atcps);
@@ -157,36 +160,29 @@ int nn_btcp_create (void *hint, struct nn_epbase **epbase)
 
     rc = nn_btcp_listen (self);
     if (rc != 0) {
-        nn_epbase_term (&self->epbase);
+        nn_fsm_raise_from_src (&self->fsm, &self->listen_error,
+            NN_BTCP_SRC_BTCP, NN_BTCP_TYPE_LISTEN_ERR);
         return rc;
     }
-
-    /*  Return the base class as an out parameter. */
-    *epbase = &self->epbase;
 
     return 0;
 }
 
-static void nn_btcp_stop (struct nn_epbase *self)
+static void nn_btcp_stop (void *self)
 {
-    struct nn_btcp *btcp;
-
-    btcp = nn_cont (self, struct nn_btcp, epbase);
+    struct nn_btcp *btcp = self;
 
     nn_fsm_stop (&btcp->fsm);
 }
 
-static void nn_btcp_destroy (struct nn_epbase *self)
+static void nn_btcp_destroy (void *self)
 {
-    struct nn_btcp *btcp;
-
-    btcp = nn_cont (self, struct nn_btcp, epbase);
+    struct nn_btcp *btcp = self;
 
     nn_assert_state (btcp, NN_BTCP_STATE_IDLE);
     nn_list_term (&btcp->atcps);
     nn_assert (btcp->atcp == NULL);
     nn_usock_term (&btcp->usock);
-    nn_epbase_term (&btcp->epbase);
     nn_fsm_term (&btcp->fsm);
 
     nn_free (btcp);
@@ -244,7 +240,7 @@ atcps_stopping:
         if (nn_list_empty (&btcp->atcps)) {
             btcp->state = NN_BTCP_STATE_IDLE;
             nn_fsm_stopped_noevent (&btcp->fsm);
-            nn_epbase_stopped (&btcp->epbase);
+            nn_ep_stopped (btcp->ep);
             return;
         }
 
@@ -278,6 +274,12 @@ static void nn_btcp_handler (struct nn_fsm *self, int src, int type,
 /*  The execution is yielded to the atcp state machine in this state.         */
 /******************************************************************************/
     case NN_BTCP_STATE_ACTIVE:
+        if (src == NN_BTCP_SRC_BTCP) {   
+            nn_assert (type == NN_BTCP_TYPE_LISTEN_ERR);
+            nn_free (btcp);
+            return;
+        }
+
         if (src == NN_BTCP_SRC_USOCK) {
             /*  usock object cleaning up */
             nn_assert (type == NN_USOCK_SHUTDOWN || type == NN_USOCK_STOPPED);
@@ -328,7 +330,7 @@ static int nn_btcp_listen (struct nn_btcp *self)
     uint16_t port;
 
     /*  First, resolve the IP address. */
-    addr = nn_epbase_getaddr (&self->epbase);
+    addr = nn_ep_getaddr (self->ep);
     memset (&ss, 0, sizeof (ss));
 
     /*  Parse the port. */
@@ -345,7 +347,7 @@ static int nn_btcp_listen (struct nn_btcp *self)
 
     /*  Parse the address. */
     ipv4onlylen = sizeof (ipv4only);
-    nn_epbase_getopt (&self->epbase, NN_SOL_SOCKET, NN_IPV4ONLY,
+    nn_ep_getopt (self->ep, NN_SOL_SOCKET, NN_IPV4ONLY,
         &ipv4only, &ipv4onlylen);
     nn_assert (ipv4onlylen == sizeof (ipv4only));
     rc = nn_iface_resolve (addr, pos - addr - 1, ipv4only, &ss, &sslen);
@@ -400,7 +402,7 @@ static void nn_btcp_start_accepting (struct nn_btcp *self)
     /*  Allocate new atcp state machine. */
     self->atcp = nn_alloc (sizeof (struct nn_atcp), "atcp");
     alloc_assert (self->atcp);
-    nn_atcp_init (self->atcp, NN_BTCP_SRC_ATCP, &self->epbase, &self->fsm);
+    nn_atcp_init (self->atcp, NN_BTCP_SRC_ATCP, self->ep, &self->fsm);
 
     /*  Start waiting for a new incoming connection. */
     nn_atcp_start (self->atcp, &self->usock);
